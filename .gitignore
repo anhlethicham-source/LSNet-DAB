@@ -1,0 +1,8 @@
+__pycache__/
+logs/
+results_overlay/
+work_dirs/
+*.pth
+*.pyc
+.DS_Store
+results/
