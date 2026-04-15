@@ -4,10 +4,10 @@ _base_ = [
     '../_base_/default_runtime.py'
 ]
 custom_imports = dict(imports=['mmseg_custom.fix_isic'], allow_failed_imports=False)
-# custom_imports = dict(
-#     imports=['model.lsnet', 'model.lsnet_fpn', 'mmseg_custom.fix_isic'],
-#     allow_failed_imports=False
-# )
+custom_imports = dict(
+     imports=['model.lsnet', 'model.lsnet_fpn', 'mmseg_custom.model.loss_function'],
+     allow_failed_imports=False
+ )
 # model settings
 model = dict(
     pretrained=None,
@@ -24,7 +24,23 @@ model = dict(
         out_channels=256,
         num_outs=4
         ),
-    decode_head=dict(num_classes=2))
+    decode_head=dict(
+        out_channels=1,
+        num_classes= 1,
+        loss_decode=dict(
+            type='FocalDiceLoss',
+            gamma=2.0,
+            alpha=0.75,
+            wf=1,
+            wd=0.5,
+            smooth=1.0,
+            loss_name='loss_focal_dice'
+        )
+    ),
+            
+
+    auxiliary_head=None
+    )
 
 
 # Use 1 for single-GPU or set to actual GPU count multiplier if scaling LR/iters

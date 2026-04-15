@@ -1,2 +1,2 @@
-from .my_dice_loss import MyDiceLoss
-__all__ = [..., 'MyDiceLoss'] 
+from .dice_function import MyBCEDiceLoss, FocalDiceLoss
+__all__ = [..., 'MyBCEDiceLoss', 'FocalDiceLoss']
