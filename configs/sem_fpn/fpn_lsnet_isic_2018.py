@@ -3,11 +3,10 @@ _base_ = [
     '../_base_/datasets/isic_2018.py',
     '../_base_/default_runtime.py'
 ]
-custom_imports = dict(imports=['mmseg_custom.fix_isic'], allow_failed_imports=False)
 custom_imports = dict(
-     imports=['model.lsnet', 'model.lsnet_fpn', 'mmseg_custom.model.loss_function'],
-     allow_failed_imports=False
- )
+    imports=['model.lsnet', 'model.lsnet_fpn', 'mmseg_custom.model.loss_function'],
+    allow_failed_imports=False
+)
 # model settings
 model = dict(
     pretrained=None,
@@ -32,7 +31,7 @@ model = dict(
             gamma=2.0,
             alpha=0.75,
             wf=1,
-            wd=0.5,
+            wd=1.0,      
             smooth=1.0,
             loss_name='loss_focal_dice'
         )
@@ -52,7 +51,7 @@ optimizer_config = dict()
 # learning policy
 lr_config = dict(policy='poly', power=0.9, min_lr=1e-6, by_epoch=False)
 # runtime settings
-runner = dict(type='IterBasedRunner', max_iters=20000 // gpu_multiples)
+runner = dict(type='IterBasedRunner', max_iters=80000 // gpu_multiples)
 checkpoint_config = dict(by_epoch=False, interval=4000 // gpu_multiples)
 evaluation = dict(interval=4000 // gpu_multiples, metric='mIoU')
 

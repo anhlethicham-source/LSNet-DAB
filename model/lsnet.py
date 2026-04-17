@@ -207,14 +207,92 @@ class LSConv(nn.Module):
     def forward(self, x):
         return self.bn(self.ska(x, self.lkp(x))) + x
 
-class Block(torch.nn.Module):    
+
+class BNPReLU(nn.Module):
+    def __init__(self, nIn):
+        super().__init__()
+        self.bn = nn.BatchNorm2d(nIn, eps=1e-3)
+        self.acti = nn.PReLU(nIn)
+
+    def forward(self, input):
+        output = self.bn(input)
+        output = self.acti(output)
+        return output
+
+
+class Conv_DAB(nn.Module):
+    def __init__(self, nIn, nOut, kSize, stride, padding, dilation=(1, 1), groups=1, bn_acti=False, bias=False):
+        super().__init__()
+        self.bn_acti = bn_acti
+        self.conv = nn.Conv2d(nIn, nOut, kernel_size=kSize,
+                              stride=stride, padding=padding,
+                              dilation=dilation, groups=groups, bias=bias)
+        if self.bn_acti:
+            self.bn_prelu = BNPReLU(nOut)
+
+    def forward(self, input):
+        output = self.conv(input)
+        if self.bn_acti:
+            output = self.bn_prelu(output)
+        return output
+
+
+class DABModule_7(nn.Module):
+    """DABModule with 7×1/1×7 asymmetric convolutions (instead of 3×1/1×3)
+    and 7×1(D)/1×7(D) dilated convolutions (instead of 3×1(D)/1×3(D))."""
+    def __init__(self, nIn, d=1):
+        super().__init__()
+        self.bn_relu_1 = BNPReLU(nIn)
+        self.conv3x3 = Conv_DAB(nIn, nIn // 2, 3, 1, padding=1, bn_acti=True)
+
+        self.dconv7x1 = Conv_DAB(nIn // 2, nIn // 2, (7, 1), 1,
+                                  padding=(3, 0), groups=nIn // 2, bn_acti=True)
+        self.dconv1x7 = Conv_DAB(nIn // 2, nIn // 2, (1, 7), 1,
+                                  padding=(0, 3), groups=nIn // 2, bn_acti=True)
+        self.ddconv7x1 = Conv_DAB(nIn // 2, nIn // 2, (7, 1), 1,
+                                   padding=(3 * d, 0), dilation=(d, 1), groups=nIn // 2, bn_acti=True)
+        self.ddconv1x7 = Conv_DAB(nIn // 2, nIn // 2, (1, 7), 1,
+                                   padding=(0, 3 * d), dilation=(1, d), groups=nIn // 2, bn_acti=True)
+
+        self.bn_relu_2 = BNPReLU(nIn // 2)
+        self.conv1x1 = Conv_DAB(nIn // 2, nIn, 1, 1, padding=0, bn_acti=False)
+
+    def forward(self, input):
+        output = self.bn_relu_1(input)
+        output = self.conv3x3(output)
+
+        br1 = self.dconv7x1(output)
+        br1 = self.dconv1x7(br1)
+        br2 = self.ddconv7x1(output)
+        br2 = self.ddconv1x7(br2)
+
+        output = br1 + br2
+        output = self.bn_relu_2(output)
+        output = self.conv1x1(output)
+
+        return output + input
+
+
+class DASmall(DABModule_7):
+    """DABModule_7 with fixed dilation=2 — stages 0-1, local context."""
+    def __init__(self, nIn):
+        super().__init__(nIn, d=2)
+
+
+class DALarge(DABModule_7):
+    """DABModule_7 with variable dilation — stage 2, wide multi-scale context."""
+    def __init__(self, nIn, d):
+        super().__init__(nIn, d=d)
+
+
+class Block(torch.nn.Module):
     def __init__(self,
                  ed, kd, nh=8,
                  ar=4,
                  resolution=14,
-                 stage=-1, depth=-1):
+                 stage=-1, depth=-1, dilation=2):
         super().__init__()
-            
+
         if depth % 2 == 0:
             self.mixer = RepVGGDW(ed)
             self.se = SqueezeExcite(ed, 0.25)
@@ -222,8 +300,10 @@ class Block(torch.nn.Module):
             self.se = torch.nn.Identity()
             if stage == 3:
                 self.mixer = Residual(Attention(ed, kd, nh, ar, resolution=14))
+            elif stage < 2:
+                self.mixer = DASmall(ed)
             else:
-                self.mixer = LSConv(ed)
+                self.mixer = DALarge(ed, d=dilation)
 
         self.ffn = Residual(FFN(ed, int(ed * 2)))
 
@@ -258,10 +338,19 @@ class LSNet(torch.nn.Module):
         self.blocks4 = nn.Sequential()
         blocks = [self.blocks1, self.blocks2, self.blocks3, self.blocks4]
         
+        # DAB Block 1 (stages 0-1): fixed dilation=2
+        # DAB Block 2 (stage 2): cycling dilations following [4, 4, 8, 8, 16, 16]
+        dab_block2_dilations = [4, 4, 8, 8, 16, 16]
         for i, (ed, kd, dpth, nh, ar) in enumerate(
                 zip(embed_dim, key_dim, depth, num_heads, attn_ratio)):
             for d in range(dpth):
-                blocks[i].add_module(f'block_{d}',Block(ed, kd, nh, ar, resolution, stage=i, depth=d))
+                if i < 2:
+                    dilation = 2
+                elif i == 2:
+                    dilation = dab_block2_dilations[d % len(dab_block2_dilations)]
+                else:
+                    dilation = 2  # stage 3 uses Attention; dilation unused
+                blocks[i].add_module(f'block_{d}', Block(ed, kd, nh, ar, resolution, stage=i, depth=d, dilation=dilation))
             
             if i != len(depth) - 1:
                 blk = blocks[i+1]
@@ -354,10 +443,6 @@ class LSNet(torch.nn.Module):
         """Convert the model into training mode while keep layers freezed."""
         super(LSNet, self).train(mode)
         self._freeze_stages()
-        if mode:
-            for m in self.modules():
-                if isinstance(m, _BatchNorm):
-                    m.eval()
 
     def forward(self, x):
         x = self.patch_embed(x)
