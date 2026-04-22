@@ -48,21 +48,26 @@ class MarginalDiceLoss(nn.Module):
         if target.dim() == 3:
             target = target.unsqueeze(1)
 
-        # pixel-wise dice loss (no reduction)
+        # 1. Tính weight map TRƯỚC (từ ground truth, không cần gradient)
+        with torch.no_grad():
+            weight = _margin_weight(target, self.weight_in, self.weight_out,
+                                    self.weight_margin, self.kernel_size)
+
+        # 2. Tính probability
         prob = torch.sigmoid(pred)
-        prob_flat = prob.view(prob.size(0), -1)
-        tgt_flat = target.view(target.size(0), -1)
-        intersection = (prob_flat * tgt_flat).sum(dim=1)
-        dice_per_sample = 1.0 - (2.0 * intersection + self.smooth) / (
-            prob_flat.sum(dim=1) + tgt_flat.sum(dim=1) + self.smooth
-        )
-        # expand to spatial shape for weighting
-        dice_map = dice_per_sample.view(-1, 1, 1, 1).expand_as(pred)
 
-        weight = _margin_weight(target, self.weight_in, self.weight_out,
-                                self.weight_margin, self.kernel_size)
-        return (weight * dice_map).mean()
+        # 3. Weighted Dice THỰC SỰ per-pixel, per-sample
+        # sum theo (C, H, W), giữ chiều batch
+        w_intersection = (weight * prob * target).sum(dim=(1, 2, 3))  # (B,)
+        w_pred_sum = (weight * prob).sum(dim=(1, 2, 3))  # (B,)
+        w_target_sum = (weight * target).sum(dim=(1, 2, 3))  # (B,)
 
+        dice = (2.0 * w_intersection + self.smooth) / (
+                w_pred_sum + w_target_sum + self.smooth
+        )  # (B,)
+
+        loss = (1.0 - dice).mean()  # scalar
+        return loss
     @property
     def loss_name(self):
         return self._loss_name
@@ -146,6 +151,72 @@ class MyBCEDiceLoss(nn.Module):
         dice_loss = 1.0 - dice_score.mean()
 
         return self.wb * bce_loss + self.wd * dice_loss
+
+    @property
+    def loss_name(self):
+        return self._loss_name
+
+
+# --- CombinedSegLoss: Focal + Dice + MarginalDice --------------------
+
+@LOSSES.register_module()
+class CombinedSegLoss(nn.Module):
+    """Focal + standard Dice + MarginalDice (boundary-aware).
+
+    Focal      → xử lý class imbalance, học toàn bộ ảnh
+    Dice       → tối ưu trực tiếp overlap (DSC)
+    MarginalDice → phạt nặng vùng viền để cải thiện IoU
+    """
+
+    def __init__(self,
+                 wf=0.4, wd=0.3, wm=0.5,
+                 gamma=2.0, alpha=0.25,
+                 weight_in=3, weight_out=1, weight_margin=6, kernel_size=9,
+                 smooth=1.0,
+                 loss_name='loss_combined', loss_weight=1.0, **kwargs):
+        super().__init__()
+        self.wf = wf
+        self.wd = wd
+        self.wm = wm
+        self.gamma = gamma
+        self.alpha = alpha
+        self.weight_in = weight_in
+        self.weight_out = weight_out
+        self.weight_margin = weight_margin
+        self.kernel_size = kernel_size
+        self.smooth = smooth
+        self._loss_name = loss_name
+
+    def forward(self, pred, target, **kwargs):
+        target = target.float()
+        if target.dim() == 3:
+            target = target.unsqueeze(1)
+
+        prob = torch.sigmoid(pred)
+
+        # 1. Focal loss
+        bce = F.binary_cross_entropy_with_logits(pred, target, reduction='none')
+        p_t = prob * target + (1 - prob) * (1 - target)
+        focal = (self.alpha * (1 - p_t) ** self.gamma * bce).mean()
+
+        # 2. Standard Dice loss
+        prob_flat = prob.contiguous().view(prob.size(0), -1)
+        tgt_flat  = target.contiguous().view(target.size(0), -1)
+        inter = (prob_flat * tgt_flat).sum(dim=1)
+        dice  = 1.0 - ((2.0 * inter + self.smooth) /
+                       (prob_flat.sum(dim=1) + tgt_flat.sum(dim=1) + self.smooth)).mean()
+
+        # 3. MarginalDice — boundary-aware, weight map không cần gradient
+        with torch.no_grad():
+            weight = _margin_weight(target, self.weight_in, self.weight_out,
+                                    self.weight_margin, self.kernel_size)
+        w_inter   = (weight * prob * target).sum(dim=(1, 2, 3))
+        w_pred    = (weight * prob).sum(dim=(1, 2, 3))
+        w_tgt     = (weight * target).sum(dim=(1, 2, 3))
+        marginal  = (1.0 - (2.0 * w_inter + 1e-3) /
+                     (w_pred + w_tgt + 1e-3)).mean()
+
+        return self.wf * focal + self.wd * dice + self.wm * marginal
 
     @property
     def loss_name(self):

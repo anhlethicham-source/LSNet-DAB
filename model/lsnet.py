@@ -208,16 +208,16 @@ class LSConv(nn.Module):
         return self.bn(self.ska(x, self.lkp(x))) + x
 
 
-class BNPReLU(nn.Module):
+class GNPReLU(nn.Module):
+    """GroupNorm + PReLU — stable with small batch sizes (batch=2)."""
     def __init__(self, nIn):
         super().__init__()
-        self.bn = nn.BatchNorm2d(nIn, eps=1e-3)
+        num_groups = max(1, min(8, nIn // 8))
+        self.gn = nn.GroupNorm(num_groups, nIn, eps=1e-3)
         self.acti = nn.PReLU(nIn)
 
     def forward(self, input):
-        output = self.bn(input)
-        output = self.acti(output)
-        return output
+        return self.acti(self.gn(input))
 
 
 class Conv_DAB(nn.Module):
@@ -228,12 +228,12 @@ class Conv_DAB(nn.Module):
                               stride=stride, padding=padding,
                               dilation=dilation, groups=groups, bias=bias)
         if self.bn_acti:
-            self.bn_prelu = BNPReLU(nOut)
+            self.gn_prelu = GNPReLU(nOut)
 
     def forward(self, input):
         output = self.conv(input)
         if self.bn_acti:
-            output = self.bn_prelu(output)
+            output = self.gn_prelu(output)
         return output
 
 
@@ -242,7 +242,7 @@ class DABModule_7(nn.Module):
     and 7×1(D)/1×7(D) dilated convolutions (instead of 3×1(D)/1×3(D))."""
     def __init__(self, nIn, d=1):
         super().__init__()
-        self.bn_relu_1 = BNPReLU(nIn)
+        self.gn_relu_1 = GNPReLU(nIn)
         self.conv3x3 = Conv_DAB(nIn, nIn // 2, 3, 1, padding=1, bn_acti=True)
 
         self.dconv7x1 = Conv_DAB(nIn // 2, nIn // 2, (7, 1), 1,
@@ -254,11 +254,11 @@ class DABModule_7(nn.Module):
         self.ddconv1x7 = Conv_DAB(nIn // 2, nIn // 2, (1, 7), 1,
                                    padding=(0, 3 * d), dilation=(1, d), groups=nIn // 2, bn_acti=True)
 
-        self.bn_relu_2 = BNPReLU(nIn // 2)
+        self.gn_relu_2 = GNPReLU(nIn // 2)
         self.conv1x1 = Conv_DAB(nIn // 2, nIn, 1, 1, padding=0, bn_acti=False)
 
     def forward(self, input):
-        output = self.bn_relu_1(input)
+        output = self.gn_relu_1(input)
         output = self.conv3x3(output)
 
         br1 = self.dconv7x1(output)
@@ -267,7 +267,7 @@ class DABModule_7(nn.Module):
         br2 = self.ddconv1x7(br2)
 
         output = br1 + br2
-        output = self.bn_relu_2(output)
+        output = self.gn_relu_2(output)
         output = self.conv1x1(output)
 
         return output + input
@@ -443,6 +443,10 @@ class LSNet(torch.nn.Module):
         """Convert the model into training mode while keep layers freezed."""
         super(LSNet, self).train(mode)
         self._freeze_stages()
+        if mode:
+            for m in self.modules():
+                if isinstance(m, _BatchNorm):
+                    m.eval()
 
     def forward(self, x):
         x = self.patch_embed(x)
