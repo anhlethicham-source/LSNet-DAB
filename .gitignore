@@ -6,3 +6,4 @@ work_dirs/
 *.pyc
 .DS_Store
 results/
+*.md
