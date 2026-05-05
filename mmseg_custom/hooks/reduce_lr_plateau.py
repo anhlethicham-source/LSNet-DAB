@@ -3,7 +3,7 @@ from mmcv.runner import HOOKS, Hook
 
 @HOOKS.register_module()
 class ReduceLROnPlateauHook(Hook):
-    """Giảm LR ×factor khi metric không cải thiện sau patience lần eval liên tiếp."""
+    """Reduce LR by factor when metric does not improve for patience consecutive evaluations."""
 
     def __init__(self, monitor='Dice', factor=0.5, patience=5, min_lr=1e-6, eval_interval=4000):
         self.monitor = monitor
@@ -25,7 +25,7 @@ class ReduceLROnPlateauHook(Hook):
         if self.best is None or val > self.best:
             self.best = val
             self.wait = 0
-            runner.logger.info(f'ReduceLR: {self.monitor}={val:.4f} improved → best={self.best:.4f}')
+            runner.logger.info(f'ReduceLR: {self.monitor}={val:.4f} improved -> best={self.best:.4f}')
         else:
             self.wait += 1
             runner.logger.info(
@@ -36,6 +36,6 @@ class ReduceLROnPlateauHook(Hook):
                     old_lr = pg['lr']
                     pg['lr'] = max(old_lr * self.factor, self.min_lr)
                 runner.logger.info(
-                    f'ReduceLR: lr {old_lr:.2e} → {pg["lr"]:.2e}'
+                    f'ReduceLR: lr {old_lr:.2e} -> {pg["lr"]:.2e}'
                 )
                 self.wait = 0

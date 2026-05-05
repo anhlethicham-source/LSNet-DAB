@@ -34,9 +34,7 @@ def dice_score(pred, target, smooth=1e-3):
 
 @LOSSES.register_module()
 class MarginalDiceLoss(nn.Module):
-    """
-    Marginal Dice Loss cho MMSegmentation.
-    """
+    """Marginal Dice Loss for MMSegmentation."""
 
     def __init__(self,
                  weight_in=3,
@@ -64,37 +62,37 @@ class MarginalDiceLoss(nn.Module):
                 **kwargs):
         """
         Args:
-            cls_score (Tensor): Raw logits từ model, shape (B, C, H, W).
-            label (Tensor): Ground truth mask, shape (B, H, W) hoặc (B, 1, H, W).
-            ignore_index (int): Label index bị bỏ qua (thường là 255).
+            cls_score (Tensor): Raw logits from model, shape (B, C, H, W).
+            label (Tensor): Ground truth mask, shape (B, H, W) or (B, 1, H, W).
+            ignore_index (int): Label index to ignore (typically 255).
         """
-        # 1. Xử lý ignore_index (loại bỏ vùng 255 để không tính vào loss)
+        # 1. Handle ignore_index (exclude region 255 from loss computation)
         valid_mask = (label != ignore_index).float()
 
-        # Đổi các pixel ignore_index thành 0 để hàm hình thái học không bị lỗi
+        # Replace ignore_index pixels with 0 to prevent morphology errors
         clean_label = torch.where(label == ignore_index, torch.zeros_like(label), label)
 
-        # 2. Định dạng lại chiều cho label (B, 1, H, W)
+        # 2. Reshape label dimensions to (B, 1, H, W)
         clean_label = clean_label.float()
         if clean_label.dim() == 3:
             clean_label = clean_label.unsqueeze(1)
             valid_mask = valid_mask.unsqueeze(1)
 
-        # Đảm bảo số channel của cls_score khớp với label (binary segmentation)
-        # Nếu model thiết lập num_classes=1, cls_score đã là (B, 1, H, W)
+        # Ensure cls_score channels match label (binary segmentation)
+        # If model sets num_classes=1, cls_score is already (B, 1, H, W)
 
-        # 3. Tính Weight Map từ Ground Truth
+        # 3. Compute Weight Map from Ground Truth
         with torch.no_grad():
             margin_w = marginweight(clean_label, self.weight_in, self.weight_out,
                                     self.weight_margin, self.kernel_size)
-            # Không phạt vùng ignore_index
+            # Do not penalize ignore_index regions
             margin_w = margin_w * valid_mask
 
-            # 4. Tính pixel-wise BCE weighted by margin
+            # 4. Compute pixel-wise BCE weighted by margin
         bce = F.binary_cross_entropy_with_logits(cls_score, clean_label, reduction='none')
         loss = (margin_w * bce * valid_mask).sum() / (valid_mask.sum() + 1e-5)
 
-        # 5. Cộng thêm global Dice để ổn định convergence
+        # 5. Add global Dice to stabilize convergence
         dice = dice_score(cls_score, clean_label, self.smooth)
         loss = loss + (1.0 - dice)
 

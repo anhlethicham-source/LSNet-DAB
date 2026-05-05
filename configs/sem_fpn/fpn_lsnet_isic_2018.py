@@ -14,7 +14,7 @@ model = dict(
     backbone=dict(
         type='lsnet_t',
         style='pytorch',
-        pretrained= 'pretrain/lsnet_t.pth',
+        pretrained=None,
         frozen_stages=-1,
     ),
     neck=dict(
@@ -82,11 +82,10 @@ lr_config = dict(
     by_epoch=False
 )
 # runtime settings
-runner = dict(type='IterBasedRunner', max_iters=80000 // gpu_multiples)
+runner = dict(type='IterBasedRunner', max_iters=120000 // gpu_multiples)
 checkpoint_config = dict(by_epoch=False, interval=4000 // gpu_multiples)
-evaluation = dict(interval=4000 // gpu_multiples, metric='mIoU', save_best='Dice', rule='greater')
+evaluation = dict(interval=4000 // gpu_multiples, metric='mIoU', save_best='Dice', rule='greater', pre_eval=True)
 
-# Mixed precision — giảm ~40% VRAM, tăng tốc độ training trên RTX 2050 (4GB)
 fp16 = dict(loss_scale='dynamic')
 
 # Load custom dataset/model plugins from mmseg_custom

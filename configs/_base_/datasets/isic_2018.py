@@ -2,6 +2,7 @@
 dataset_type = 'ISIC2018Dataset'
 # data_root = 'data/ade/ADEChallengeData2016'
 data_root = '/mnt/d/imagenet/data/'
+split_dir = '/mnt/d/imagenet/data/splits'
 data_mask_root = '/mnt/d/imagenet_processed/masks'
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
@@ -25,8 +26,8 @@ test_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(
         type='MultiScaleFlipAug',
-        img_scale=[(320, 320), (384, 384), (448, 448), (512, 512)],
-        flip=True,
+        img_scale=(256, 256),
+        flip=False,
         transforms=[
             dict(type='AlignResize', keep_ratio=True, size_divisor=32),
             dict(type='RandomFlip'),
@@ -46,17 +47,20 @@ data = dict(
             data_root=data_root,
             img_dir='images/train',
             ann_dir='/mnt/d/imagenet_processed/masks/train',
+            split=f'{split_dir}/train_ids.txt',
             pipeline=train_pipeline)),
     val=dict(
         type=dataset_type,
         data_root=data_root,
-        img_dir='images/val',
-        ann_dir='/mnt/d/imagenet_processed/masks/val',
+        img_dir='images/train',
+        ann_dir='/mnt/d/imagenet_processed/masks/train',
+        split=f'{split_dir}/val_ids.txt',
         pipeline=test_pipeline),
     test=dict(
         type=dataset_type,
         data_root=data_root,
-        img_dir='images/test',
-        ann_dir='/mnt/d/imagenet_processed/masks/test',
+        img_dir='images/train',
+        ann_dir='/mnt/d/imagenet_processed/masks/train',
+        split=f'{split_dir}/val_ids.txt',
         pipeline=test_pipeline))
 
